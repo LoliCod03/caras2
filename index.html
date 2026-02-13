@@ -3,105 +3,151 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>IA Facial - Keras 3 Fix</title>
+    <title>IA Reconocimiento Facial 👤</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background-color: #121212; color: white; text-align: center; font-family: sans-serif; }
-        .cam-box { width: 350px; height: 350px; margin: 20px auto; border: 4px solid #00d1b2; border-radius: 15px; overflow: hidden; }
-        #resultado { font-size: 2.5rem; color: #00d1b2; font-weight: bold; }
-        .alert { margin: 20px; border-radius: 50px; }
+        body { background-color: #121212; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .main-container { max-width: 500px; margin: 30px auto; padding: 20px; background: #1e1e1e; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .video-wrap { position: relative; width: 350px; height: 350px; margin: 0 auto; border: 4px solid #00d1b2; border-radius: 15px; overflow: hidden; background: #000; }
+        #canvas { width: 100%; height: 100%; object-fit: cover; }
+        #resultado { font-size: 2.2rem; color: #00d1b2; font-weight: bold; margin-top: 20px; min-height: 50px; }
+        .status-badge { font-size: 0.9rem; border-radius: 50px; margin-bottom: 20px; transition: all 0.3s; }
+        .btn-custom { border-radius: 50px; padding: 10px 25px; transition: 0.3s; }
     </style>
 </head>
 <body>
 
-    <h2 class="mt-4">Reconocedor de Rostros</h2>
-    <div id="status" class="alert alert-warning">Iniciando sistema...</div>
-    
-    <div class="cam-box">
-        <canvas id="canvas" width="400" height="400" style="width:100%; height:100%"></canvas>
+<div class="container text-center">
+    <div class="main-container">
+        <h2 class="mb-4">Identificador Facial</h2>
+        <div id="status" class="status-badge alert alert-warning">Iniciando cámara y modelo...</div>
+
+        <div class="video-wrap">
+            <canvas id="canvas" width="400" height="400"></canvas>
+        </div>
+
+        <div id="resultado">Cargando...</div>
+        
+        <button class="btn btn-outline-info btn-custom mt-4" onclick="cambiarCamara()">
+            🔄 Girar Cámara
+        </button>
+
+        <video id="video" playsinline autoplay style="width: 1px; visibility: hidden;"></video>
+        <canvas id="hidden_canvas" width="150" height="150" style="display: none"></canvas>
     </div>
+</div>
 
-    <div id="resultado">Esperando IA...</div>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 
-    <video id="video" playsinline autoplay style="display: none;"></video>
-    <canvas id="hidden_canvas" width="150" height="150" style="display: none;"></canvas>
+<script>
+    var video = document.getElementById("video");
+    var canvas = document.getElementById("canvas");
+    var ctx = canvas.getContext("2d");
+    var modelo = null;
+    var currentStream = null;
+    var facingMode = "user";
 
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    // Tu lista de etiquetas personalizada
+    const PERSONAS = ["Daniela", "Fajardo", "Gabriel", "Idney", "Jesús", "Kevin", "Victor"];
 
-    <script>
-        let modelo = null;
-        const PERSONAS = ["Daniela", "Fajardo", "Gabriel", "Idney", "Jesús", "Kevin", "Victor"];
+    async function cargarModelo() {
+        try {
+            // 1. Descargar el model.json
+            const response = await fetch('./model.json');
+            const modelJson = await response.json();
 
-        async function cargarTodo() {
-            // 1. Activar Cámara
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({video: {width: 400, height: 400}});
-                document.getElementById("video").srcObject = stream;
-                renderizarCamara();
-            } catch (e) {
-                document.getElementById("status").innerText = "Error: No se detectó cámara.";
-                return;
-            }
+            // 2. PARCHE KERAS 3: Traducir 'batch_shape' a 'batch_input_shape'
+            if (modelJson.modelTopology && modelJson.modelTopology.model_config) {
+                const config = modelJson.modelTopology.model_config.config;
+                const layers = config.layers || config.layers_configs;
 
-            // 2. Cargar y Parchear Modelo Keras 3
-            try {
-                const response = await fetch('./model.json');
-                const modelJson = await response.json();
-
-                // TRUCO PARA KERAS 3: Traducir 'batch_shape' a 'batch_input_shape'
-                if (modelJson.modelTopology && modelJson.modelTopology.model_config) {
-                    const layers = modelJson.modelTopology.model_config.config.layers;
-                    if (layers && layers[0] && layers[0].config.batch_shape) {
-                        // Copiamos el valor al formato que TFJS entiende
+                if (layers && layers[0] && layers[0].config) {
+                    if (layers[0].config.batch_shape) {
                         layers[0].config.batch_input_shape = layers[0].config.batch_shape;
                     }
                 }
+            }
 
-                // Cargar el modelo con el JSON corregido en memoria
-                modelo = await tf.loadLayersModel(tf.io.fromMemory(modelJson));
-                
-                document.getElementById("status").innerText = "¡IA Lista! ✅";
-                document.getElementById("status").className = "alert alert-success";
-                predecir();
-            } catch (err) {
-                console.error(err);
-                document.getElementById("status").innerText = "Error al leer el modelo. Revisa la consola.";
-                document.getElementById("status").className = "alert alert-danger";
+            // 3. CARGA DESDE MEMORIA (Evita errores de ruta en GitHub Pages)
+            // Esto le dice explícitamente dónde buscar los archivos .bin
+            const path = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
+            
+            modelo = await tf.loadLayersModel(tf.io.fromMemory(
+                modelJson.modelTopology,
+                modelJson.weightsManifest,
+                path
+            ));
+
+            document.getElementById("status").innerText = "¡IA Lista! ✅";
+            document.getElementById("status").className = "status-badge alert alert-success";
+            predecir();
+
+        } catch (error) {
+            console.error("Error crítico:", error);
+            document.getElementById("status").innerText = "Error al cargar archivos .bin o .json";
+            document.getElementById("status").className = "status-badge alert alert-danger";
+        }
+    }
+
+    function mostrarCamara() {
+        var constraints = { audio: false, video: { facingMode: facingMode, width: 400, height: 400 } };
+        navigator.mediaDevices.getUserMedia(constraints)
+            .then(function(stream) {
+                currentStream = stream;
+                video.srcObject = currentStream;
+                actualizarCanvas();
+            })
+            .catch(function(err) {
+                console.error("Error cámara: ", err);
+                document.getElementById("status").innerText = "Error: Permite el acceso a la cámara";
+            });
+    }
+
+    function actualizarCanvas() {
+        ctx.drawImage(video, 0, 0, 400, 400, 0, 0, 400, 400);
+        requestAnimationFrame(actualizarCanvas);
+    }
+
+    function cambiarCamara() {
+        if (currentStream) { currentStream.getTracks().forEach(track => track.stop()); }
+        facingMode = (facingMode == "user") ? "environment" : "user";
+        mostrarCamara();
+    }
+
+    async function predecir() {
+        if (modelo != null) {
+            const hidden = document.getElementById("hidden_canvas");
+            const hCtx = hidden.getContext("2d");
+            
+            // Redimensionar a 150x150 para el modelo
+            hCtx.drawImage(canvas, 0, 0, 400, 400, 0, 0, 150, 150);
+
+            const prediccion = tf.tidy(() => {
+                const tensor = tf.browser.fromPixels(hidden)
+                                 .toFloat()
+                                 .div(tf.scalar(255.0))
+                                 .expandDims(0);
+                return modelo.predict(tensor).dataSync();
+            });
+
+            let maxIndex = prediccion.indexOf(Math.max(...prediccion));
+            let confianza = prediccion[maxIndex];
+
+            // Umbral de seguridad del 65%
+            if (confianza > 0.65) {
+                document.getElementById("resultado").innerText = PERSONAS[maxIndex];
+            } else {
+                document.getElementById("resultado").innerText = "Identificando...";
             }
         }
+        setTimeout(predecir, 500);
+    }
 
-        function renderizarCamara() {
-            const ctx = document.getElementById("canvas").getContext("2d");
-            ctx.drawImage(document.getElementById("video"), 0, 0, 400, 400);
-            requestAnimationFrame(renderizarCamara);
-        }
+    window.onload = () => {
+        mostrarCamara();
+        cargarModelo();
+    };
+</script>
 
-        async function predecir() {
-            if (modelo) {
-                const hidden = document.getElementById("hidden_canvas");
-                const ctx = hidden.getContext("2d");
-                
-                // Redimensionar para la IA (150x150)
-                ctx.drawImage(document.getElementById("canvas"), 0, 0, 400, 400, 0, 0, 150, 150);
-
-                const tensor = tf.tidy(() => {
-                    return tf.browser.fromPixels(hidden)
-                        .toFloat()
-                        .div(255)
-                        .expandDims(0);
-                });
-
-                const prediccion = await modelo.predict(tensor).data();
-                const valorMax = Math.max(...prediccion);
-                const idPersona = prediccion.indexOf(valorMax);
-
-                // Solo mostrar si tiene más del 65% de seguridad
-                document.getElementById("resultado").innerText = valorMax > 0.65 ? PERSONAS[idPersona] : "Identificando...";
-            }
-            setTimeout(predecir, 400);
-        }
-
-        window.onload = cargarTodo;
-    </script>
 </body>
 </html>

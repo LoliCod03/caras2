@@ -49,31 +49,35 @@
     var currentStream = null;
     var facingMode = "user";
 
-    // --- LISTA DE CLASES (Orden Alfabético según tu entrenamiento) ---
     const PERSONAS = ["Daniela", "Fajardo", "Gabriel", "Idney", "Jesús", "Kevin", "Victor"];
 
     async function cargarModelo() {
         try {
-            // 1. Descargamos el JSON manualmente para corregirlo
             const response = await fetch('./model.json');
             const modelJson = await response.json();
 
-            // 2. PARCHE CRÍTICO: Inyectamos la forma de entrada que TFJS espera
-            // Esto soluciona el error "InputLayer should be passed either a batchInputShape..."
+            // PARCHE MAESTRO PARA INPUTLAYER
             if (modelJson.modelTopology && modelJson.modelTopology.model_config) {
-                const config = modelJson.modelTopology.model_config.config;
-                const layers = config.layers || config.layers_configs; 
-                
-                if (layers && layers[0]) {
-                    // Forzamos la configuración de entrada en la primera capa
-                    layers[0].config.batch_input_shape = [null, 150, 150, 3];
+                // Buscamos la capa de entrada en la estructura del JSON
+                let config = modelJson.modelTopology.model_config.config;
+                let layers = config.layers || config.layers_configs;
+
+                if (layers) {
+                    // Keras v3 usa a veces una estructura distinta, buscamos la primera capa
+                    let firstLayer = layers[0];
+                    if (firstLayer && firstLayer.config) {
+                        // Forzamos la propiedad que TFJS necesita
+                        firstLayer.config.batch_input_shape = [null, 150, 150, 3];
+                    }
                 }
             }
 
-            // 3. Cargamos el modelo usando un cargador especial que acepta el JSON modificado
-            // Usamos un IOHandler falso para engañar a TFJS y que acepte nuestro JSON corregido
-            const model = await tf.loadLayersModel(tf.io.fromMemory(modelJson));
-            modelo = model;
+            // Cargamos usando un objeto que maneja la memoria directamente
+            modelo = await tf.loadLayersModel(tf.io.fromMemory(
+                modelJson.modelTopology,
+                modelJson.weightsManifest,
+                window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1)
+            ));
 
             document.getElementById("status").innerText = "¡IA Lista para reconocer!";
             document.getElementById("status").className = "status-badge alert alert-success";
@@ -81,7 +85,7 @@
 
         } catch (error) {
             console.error("Error cargando modelo:", error);
-            document.getElementById("status").innerText = "Error: Asegúrate de subir el .json y los 3 .bin";
+            document.getElementById("status").innerText = "Error: Verifica que los 3 archivos .bin estén con el .json";
             document.getElementById("status").className = "status-badge alert alert-danger";
         }
     }
@@ -112,8 +116,6 @@
         if (modelo != null) {
             const tempCanvas = document.getElementById("othercanvas");
             const tempCtx = tempCanvas.getContext("2d");
-
-            // Pasamos la imagen a 150x150
             tempCtx.drawImage(canvas, 0, 0, 400, 400, 0, 0, 150, 150);
 
             const prediccion = tf.tidy(() => {
@@ -125,12 +127,10 @@
                 return modelo.predict(tensor).dataSync();
             });
 
-            // Encontrar el valor más alto
             let maxIndex = prediccion.indexOf(Math.max(...prediccion));
             let confianza = prediccion[maxIndex];
 
-            // Umbral de confianza del 65%
-            if (confianza > 0.65) {
+            if (confianza > 0.60) {
                 document.getElementById("resultado").innerText = PERSONAS[maxIndex];
             } else {
                 document.getElementById("resultado").innerText = "Desconocido";
@@ -139,12 +139,10 @@
         setTimeout(predecir, 400); 
     }
 
-    // Iniciar todo al cargar la ventana
     window.onload = () => {
         mostrarCamara();
         cargarModelo();
     };
 </script>
-
 </body>
 </html>

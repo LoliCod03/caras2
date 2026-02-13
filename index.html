@@ -3,35 +3,40 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Reconocimiento Facial IA 👤</title>
+    <title>IA Reconocimiento Facial 👤</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background-color: #121212; color: white; font-family: sans-serif; }
+        body { background-color: #1a1a1a; color: white; font-family: 'Segoe UI', sans-serif; }
+        .main-card { background: #2d2d2d; border-radius: 20px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); margin-top: 30px; }
         .contenedor-camara { 
-            position: relative; width: 400px; height: 400px; 
-            margin: 20px auto; border: 5px solid #00d1b2; border-radius: 15px; 
+            position: relative; width: 350px; height: 350px; 
+            margin: 0 auto; border: 4px solid #00d1b2; border-radius: 15px; 
             overflow: hidden; background: #000;
         }
-        #resultado { font-size: 2.5rem; color: #00d1b2; font-weight: bold; margin-top: 15px; }
-        .status-badge { font-size: 0.9rem; padding: 10px; border-radius: 5px; margin-bottom: 20px; }
+        #resultado { font-size: 2.2rem; color: #00d1b2; font-weight: bold; margin-top: 20px; min-height: 60px; }
+        .status-badge { font-size: 0.85rem; border-radius: 50px; margin-bottom: 20px; }
     </style>
 </head>
 <body>
 
-<div class="container text-center mt-5">
-    <h1>Reconocedor de Rostros</h1>
-    <div id="status" class="status-badge alert alert-warning">Cargando Modelo Inteligente...</div>
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-6 main-card text-center">
+            <h2 class="mb-4">Identificador de Rostros</h2>
+            <div id="status" class="status-badge alert alert-info">Cargando archivos del modelo...</div>
 
-    <div class="contenedor-camara">
-        <canvas id="canvas" width="400" height="400"></canvas>
+            <div class="contenedor-camara">
+                <canvas id="canvas" width="400" height="400" style="width: 100%; height: 100%;"></canvas>
+            </div>
+
+            <div id="resultado">Iniciando...</div>
+            
+            <button class="btn btn-outline-info w-100 mt-3" onclick="cambiarCamara()">🔄 Alternar Cámara</button>
+
+            <video id="video" playsinline autoplay style="width: 1px; visibility: hidden;"></video>
+            <canvas id="othercanvas" width="150" height="150" style="display: none"></canvas>
+        </div>
     </div>
-
-    <div id="resultado">Esperando...</div>
-    
-    <button class="btn btn-outline-light mt-4" onclick="cambiarCamara()">🔄 Cambiar Cámara</button>
-
-    <video id="video" playsinline autoplay style="width: 1px; visibility: hidden;"></video>
-    <canvas id="othercanvas" width="150" height="150" style="display: none"></canvas>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
@@ -44,37 +49,39 @@
     var currentStream = null;
     var facingMode = "user";
 
-    // --- EL ORDEN DE TUS CARPETAS ---
+    // --- LISTA DE CLASES (Orden Alfabético según tu entrenamiento) ---
     const PERSONAS = ["Daniela", "Fajardo", "Gabriel", "Idney", "Jesús", "Kevin", "Victor"];
 
     async function cargarModelo() {
         try {
-            // 1. Cargamos el archivo JSON
-            const resp = await fetch('./model.json');
-            let modelJson = await resp.json();
+            // 1. Descargamos el JSON manualmente para corregirlo
+            const response = await fetch('./model.json');
+            const modelJson = await response.json();
 
-            // 2. Parche de compatibilidad (Modifica el JSON en memoria)
+            // 2. PARCHE CRÍTICO: Inyectamos la forma de entrada que TFJS espera
+            // Esto soluciona el error "InputLayer should be passed either a batchInputShape..."
             if (modelJson.modelTopology && modelJson.modelTopology.model_config) {
-                let layers = modelJson.modelTopology.model_config.config.layers;
+                const config = modelJson.modelTopology.model_config.config;
+                const layers = config.layers || config.layers_configs; 
+                
                 if (layers && layers[0]) {
+                    // Forzamos la configuración de entrada en la primera capa
                     layers[0].config.batch_input_shape = [null, 150, 150, 3];
                 }
             }
 
-            // 3. Cargar el modelo usando los Shards (.bin)
-            const modelUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
-            modelo = await tf.loadLayersModel(tf.io.fromMemory(
-                modelJson.modelTopology,
-                modelJson.weightsManifest,
-                modelUrl
-            ));
+            // 3. Cargamos el modelo usando un cargador especial que acepta el JSON modificado
+            // Usamos un IOHandler falso para engañar a TFJS y que acepte nuestro JSON corregido
+            const model = await tf.loadLayersModel(tf.io.fromMemory(modelJson));
+            modelo = model;
 
-            document.getElementById("status").innerText = "¡IA Lista! Identificando...";
+            document.getElementById("status").innerText = "¡IA Lista para reconocer!";
             document.getElementById("status").className = "status-badge alert alert-success";
-            predecir(); // Iniciar escaneo
+            predecir(); 
+
         } catch (error) {
-            console.error(error);
-            document.getElementById("status").innerText = "Error al cargar modelo (.bin o .json faltantes)";
+            console.error("Error cargando modelo:", error);
+            document.getElementById("status").innerText = "Error: Asegúrate de subir el .json y los 3 .bin";
             document.getElementById("status").className = "status-badge alert alert-danger";
         }
     }
@@ -87,7 +94,7 @@
                 video.srcObject = currentStream;
                 procesarCamara();
             })
-            .catch(function(err) { console.log("Error de cámara: ", err); });
+            .catch(function(err) { console.error("Error cámara: ", err); });
     }
 
     function cambiarCamara() {
@@ -106,7 +113,7 @@
             const tempCanvas = document.getElementById("othercanvas");
             const tempCtx = tempCanvas.getContext("2d");
 
-            // Redimensionar a 150x150 para la IA
+            // Pasamos la imagen a 150x150
             tempCtx.drawImage(canvas, 0, 0, 400, 400, 0, 0, 150, 150);
 
             const prediccion = tf.tidy(() => {
@@ -118,19 +125,21 @@
                 return modelo.predict(tensor).dataSync();
             });
 
-            // Buscar quién tiene el porcentaje más alto
+            // Encontrar el valor más alto
             let maxIndex = prediccion.indexOf(Math.max(...prediccion));
             let confianza = prediccion[maxIndex];
 
-            if (confianza > 0.7) { // 70% de seguridad mínimo
+            // Umbral de confianza del 65%
+            if (confianza > 0.65) {
                 document.getElementById("resultado").innerText = PERSONAS[maxIndex];
             } else {
                 document.getElementById("resultado").innerText = "Desconocido";
             }
         }
-        setTimeout(predecir, 500); // Escanear cada medio segundo
+        setTimeout(predecir, 400); 
     }
 
+    // Iniciar todo al cargar la ventana
     window.onload = () => {
         mostrarCamara();
         cargarModelo();

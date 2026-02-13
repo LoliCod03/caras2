@@ -3,151 +3,118 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>IA Reconocimiento Facial 👤</title>
+    <title>IA Facial - Versión Final</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background-color: #121212; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        .main-container { max-width: 500px; margin: 30px auto; padding: 20px; background: #1e1e1e; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        .video-wrap { position: relative; width: 350px; height: 350px; margin: 0 auto; border: 4px solid #00d1b2; border-radius: 15px; overflow: hidden; background: #000; }
-        #canvas { width: 100%; height: 100%; object-fit: cover; }
-        #resultado { font-size: 2.2rem; color: #00d1b2; font-weight: bold; margin-top: 20px; min-height: 50px; }
-        .status-badge { font-size: 0.9rem; border-radius: 50px; margin-bottom: 20px; transition: all 0.3s; }
-        .btn-custom { border-radius: 50px; padding: 10px 25px; transition: 0.3s; }
+        body { background-color: #121212; color: white; text-align: center; font-family: sans-serif; }
+        .cam-container { width: 90%; max-width: 400px; margin: 20px auto; border: 4px solid #00d1b2; border-radius: 15px; overflow: hidden; background: #000; }
+        canvas { width: 100%; height: auto; display: block; }
+        #resultado { font-size: 2rem; color: #00d1b2; font-weight: bold; margin-top: 15px; }
+        .alert { margin: 15px; border-radius: 50px; font-size: 0.9rem; }
     </style>
 </head>
 <body>
 
-<div class="container text-center">
-    <div class="main-container">
-        <h2 class="mb-4">Identificador Facial</h2>
-        <div id="status" class="status-badge alert alert-warning">Iniciando cámara y modelo...</div>
-
-        <div class="video-wrap">
-            <canvas id="canvas" width="400" height="400"></canvas>
-        </div>
-
-        <div id="resultado">Cargando...</div>
-        
-        <button class="btn btn-outline-info btn-custom mt-4" onclick="cambiarCamara()">
-            🔄 Girar Cámara
-        </button>
-
-        <video id="video" playsinline autoplay style="width: 1px; visibility: hidden;"></video>
-        <canvas id="hidden_canvas" width="150" height="150" style="display: none"></canvas>
+    <h2 class="mt-4">Reconocedor Facial</h2>
+    <div id="status" class="alert alert-warning">Cargando sistema...</div>
+    
+    <div class="cam-container">
+        <canvas id="canvas"></canvas>
     </div>
-</div>
 
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    <div id="resultado">Esperando...</div>
 
-<script>
-    var video = document.getElementById("video");
-    var canvas = document.getElementById("canvas");
-    var ctx = canvas.getContext("2d");
-    var modelo = null;
-    var currentStream = null;
-    var facingMode = "user";
+    <video id="video" playsinline autoplay style="display: none;"></video>
+    <canvas id="hidden_canvas" width="150" height="150" style="display: none;"></canvas>
 
-    // Tu lista de etiquetas personalizada
-    const PERSONAS = ["Daniela", "Fajardo", "Gabriel", "Idney", "Jesús", "Kevin", "Victor"];
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 
-    async function cargarModelo() {
-        try {
-            // 1. Descargar el model.json
-            const response = await fetch('./model.json');
-            const modelJson = await response.json();
+    <script>
+        let modelo = null;
+        let video = document.getElementById("video");
+        let canvas = document.getElementById("canvas");
+        let ctx = canvas.getContext("2d");
+        const PERSONAS = ["Daniela", "Fajardo", "Gabriel", "Idney", "Jesús", "Kevin", "Victor"];
 
-            // 2. PARCHE KERAS 3: Traducir 'batch_shape' a 'batch_input_shape'
-            if (modelJson.modelTopology && modelJson.modelTopology.model_config) {
-                const config = modelJson.modelTopology.model_config.config;
-                const layers = config.layers || config.layers_configs;
+        async function iniciar() {
+            // 1. CÁMARA (Configuración flexible para evitar "Device not found")
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "user" }, 
+                    audio: false 
+                });
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    renderizar();
+                };
+            } catch (err) {
+                document.getElementById("status").innerText = "Error Cámara: Prueba en HTTPS o cambia de navegador";
+                console.error(err);
+            }
 
-                if (layers && layers[0] && layers[0].config) {
-                    if (layers[0].config.batch_shape) {
-                        layers[0].config.batch_input_shape = layers[0].config.batch_shape;
+            // 2. MODELO (Parche de un solo argumento para tf.io.fromMemory)
+            try {
+                const response = await fetch('./model.json');
+                const rawJson = await response.json();
+
+                // Parcheamos la estructura para que TFJS no se queje
+                if (rawJson.modelTopology && rawJson.modelTopology.model_config) {
+                    const layers = rawJson.modelTopology.model_config.config.layers;
+                    if (layers && layers[0]) {
+                        // Forzamos el nombre que TFJS busca
+                        layers[0].config.batch_input_shape = layers[0].config.batch_shape || [null, 150, 150, 3];
                     }
                 }
-            }
 
-            // 3. CARGA DESDE MEMORIA (Evita errores de ruta en GitHub Pages)
-            // Esto le dice explícitamente dónde buscar los archivos .bin
-            const path = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
-            
-            modelo = await tf.loadLayersModel(tf.io.fromMemory(
-                modelJson.modelTopology,
-                modelJson.weightsManifest,
-                path
-            ));
+                // Consolidamos en un solo argumento tipo ModelArtifacts
+                const modelArtifacts = {
+                    modelTopology: rawJson.modelTopology,
+                    format: rawJson.format,
+                    generatedBy: rawJson.generatedBy,
+                    convertedBy: rawJson.convertedBy,
+                    weightsManifest: rawJson.weightsManifest
+                };
 
-            document.getElementById("status").innerText = "¡IA Lista! ✅";
-            document.getElementById("status").className = "status-badge alert alert-success";
-            predecir();
+                // Cargamos usando la ruta actual para los .bin
+                const path = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
+                modelo = await tf.loadLayersModel(tf.io.fromMemory(modelArtifacts), { weightPathPrefix: path });
 
-        } catch (error) {
-            console.error("Error crítico:", error);
-            document.getElementById("status").innerText = "Error al cargar archivos .bin o .json";
-            document.getElementById("status").className = "status-badge alert alert-danger";
-        }
-    }
-
-    function mostrarCamara() {
-        var constraints = { audio: false, video: { facingMode: facingMode, width: 400, height: 400 } };
-        navigator.mediaDevices.getUserMedia(constraints)
-            .then(function(stream) {
-                currentStream = stream;
-                video.srcObject = currentStream;
-                actualizarCanvas();
-            })
-            .catch(function(err) {
-                console.error("Error cámara: ", err);
-                document.getElementById("status").innerText = "Error: Permite el acceso a la cámara";
-            });
-    }
-
-    function actualizarCanvas() {
-        ctx.drawImage(video, 0, 0, 400, 400, 0, 0, 400, 400);
-        requestAnimationFrame(actualizarCanvas);
-    }
-
-    function cambiarCamara() {
-        if (currentStream) { currentStream.getTracks().forEach(track => track.stop()); }
-        facingMode = (facingMode == "user") ? "environment" : "user";
-        mostrarCamara();
-    }
-
-    async function predecir() {
-        if (modelo != null) {
-            const hidden = document.getElementById("hidden_canvas");
-            const hCtx = hidden.getContext("2d");
-            
-            // Redimensionar a 150x150 para el modelo
-            hCtx.drawImage(canvas, 0, 0, 400, 400, 0, 0, 150, 150);
-
-            const prediccion = tf.tidy(() => {
-                const tensor = tf.browser.fromPixels(hidden)
-                                 .toFloat()
-                                 .div(tf.scalar(255.0))
-                                 .expandDims(0);
-                return modelo.predict(tensor).dataSync();
-            });
-
-            let maxIndex = prediccion.indexOf(Math.max(...prediccion));
-            let confianza = prediccion[maxIndex];
-
-            // Umbral de seguridad del 65%
-            if (confianza > 0.65) {
-                document.getElementById("resultado").innerText = PERSONAS[maxIndex];
-            } else {
-                document.getElementById("resultado").innerText = "Identificando...";
+                document.getElementById("status").innerText = "IA Lista ✅";
+                document.getElementById("status").className = "alert alert-success";
+                predecir();
+            } catch (err) {
+                document.getElementById("status").innerText = "Error Modelo: Revisa consola";
+                console.error("Error crítico:", err);
             }
         }
-        setTimeout(predecir, 500);
-    }
 
-    window.onload = () => {
-        mostrarCamara();
-        cargarModelo();
-    };
-</script>
+        function renderizar() {
+            ctx.drawImage(video, 0, 0);
+            requestAnimationFrame(renderizar);
+        }
 
+        async function predecir() {
+            if (modelo) {
+                const hidden = document.getElementById("hidden_canvas");
+                const hCtx = hidden.getContext("2d");
+                hCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, 150, 150);
+
+                const tensor = tf.tidy(() => {
+                    return tf.browser.fromPixels(hidden).toFloat().div(255).expandDims(0);
+                });
+
+                const pred = await modelo.predict(tensor).data();
+                const max = Math.max(...pred);
+                const index = pred.indexOf(max);
+
+                document.getElementById("resultado").innerText = max > 0.65 ? PERSONAS[index] : "...";
+            }
+            setTimeout(predecir, 500);
+        }
+
+        window.onload = iniciar;
+    </script>
 </body>
 </html>

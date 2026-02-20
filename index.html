@@ -6,14 +6,14 @@
     <title>IA Reconocimiento Facial - Fix Final</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background-color: #121212; color: white; text-align: center; font-family: sans-serif; }
+        body { background-color: #121212; color: white; text-align: center; }
         .cam-box { width: 320px; height: 320px; margin: 20px auto; border: 4px solid #00d1b2; border-radius: 15px; overflow: hidden; background: #000; }
         video { width: 100%; height: 100%; object-fit: cover; }
         #resultado { font-size: 2rem; color: #00d1b2; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div id="status" class="alert alert-info m-3">Iniciando reparación de modelo...</div>
+    <div id="status" class="alert alert-info m-3">Reparando modelo...</div>
     <div class="cam-box"><video id="video" playsinline autoplay muted></video></div>
     <div id="resultado">Esperando...</div>
     <canvas id="hidden_canvas" width="150" height="150" style="display: none;"></canvas>
@@ -24,60 +24,59 @@
         let modelo = null;
         const PERSONAS = ["Daniela", "Fajardo", "Gabriel", "Idney", "Jesús", "Kevin", "Victor"];
 
-        // FUNCIÓN CRÍTICA: Repara el error "nodeData: [object Object]"
-        function repararEstructuraKeras3(obj) {
+        // REPARADOR AVANZADO
+        function limpiarKeras3(obj) {
             if (typeof obj !== 'object' || obj === null) return obj;
 
-            if (Array.isArray(obj)) {
-                return obj.map(repararEstructuraKeras3);
-            }
+            if (Array.isArray(obj)) return obj.map(limpiarKeras3);
 
-            const nuevoObj = {};
-            for (const [key, value] of Object.entries(obj)) {
-                // Fix 1: Renombrar batch_shape
-                let nuevaKey = key === 'batch_shape' ? 'batch_input_shape' : key;
+            const res = {};
+            for (let key in obj) {
+                let value = obj[key];
                 
-                // Fix 2: Convertir inbound_nodes de Objeto a Array (Lo que pide tu error)
-                if (key === 'inbound_nodes' && value !== null && !Array.isArray(value)) {
-                    nuevoObj[nuevaKey] = []; // TensorFlow.js espera un array aquí
-                } else {
-                    nuevoObj[nuevaKey] = repararEstructuraKeras3(value);
+                // 1. Cambiar batch_shape
+                let newKey = (key === 'batch_shape') ? 'batch_input_shape' : key;
+
+                // 2. ELIMINAR inbound_nodes conflictivos
+                // Keras 3 los guarda como objetos, pero TFJS espera arrays o nada.
+                // Al borrarlos en las capas de configuración, TFJS los reconstruye solo.
+                if (key === 'inbound_nodes') {
+                    continue; 
                 }
+
+                res[newKey] = limpiarKeras3(value);
             }
-            return nuevoObj;
+            return res;
         }
 
         async function init() {
             const status = document.getElementById("status");
             try {
-                // 1. Descargar el JSON manualmente
+                // 1. Cargar JSON original
                 const response = await fetch('./model.json?v=' + Date.now());
-                const jsonOriginal = await response.json();
+                const json = await response.json();
 
-                // 2. Reparar el JSON en la memoria del celular
-                const jsonReparado = repararEstructuraKeras3(jsonOriginal);
+                // 2. Limpiar topología
+                json.modelTopology = limpiarKeras3(json.modelTopology);
                 
-                // 3. Cargar el modelo desde el JSON corregido
-                // Usamos un cargador especial de TFJS para objetos en memoria
-                modelo = await tf.loadLayersModel(tf.io.fromMemory(
-                    jsonReparado.modelTopology, 
-                    jsonReparado.format, 
-                    jsonReparado.generatedBy, 
-                    jsonReparado.weightsManifest
-                ));
+                // 3. Cargar modelo correctamente (un solo argumento)
+                modelo = await tf.loadLayersModel(tf.io.fromMemory({
+                    modelTopology: json.modelTopology,
+                    weightsManifest: json.weightsManifest,
+                    format: json.format,
+                    generatedBy: json.generatedBy
+                }));
 
-                status.innerText = "Modelo reparado y cargado ✅";
+                status.innerText = "IA Cargada ✅";
                 
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
                 document.getElementById("video").srcObject = stream;
-                
-                status.innerText = "¡IA LISTA! ✅";
                 status.className = "alert alert-success m-3";
                 predecir();
 
             } catch (err) {
-                console.error("Error detallado:", err);
-                status.innerText = "Error técnico: " + err.message;
+                console.error(err);
+                status.innerText = "Error: " + err.message;
                 status.className = "alert alert-danger m-3";
             }
         }
@@ -95,7 +94,7 @@
 
                 const pred = await modelo.predict(tensor).data();
                 const idx = pred.indexOf(Math.max(...pred));
-                document.getElementById("resultado").innerText = Math.max(...pred) > 0.65 ? PERSONAS[idx] : "Identificando...";
+                document.getElementById("resultado").innerText = Math.max(...pred) > 0.65 ? PERSONAS[idx] : "...";
             }
             setTimeout(predecir, 600);
         }

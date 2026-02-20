@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>IA Reconocimiento Facial - Fix Final</title>
+    <title>IA Reconocimiento Facial - Fix Keras 3</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #121212; color: white; text-align: center; }
@@ -13,7 +13,7 @@
     </style>
 </head>
 <body>
-    <div id="status" class="alert alert-info m-3">Reparando compatibilidad...</div>
+    <div id="status" class="alert alert-info m-3">Reparando estructura interna...</div>
     <div class="cam-box"><video id="video" playsinline autoplay muted></video></div>
     <div id="resultado">Esperando...</div>
     <canvas id="hidden_canvas" width="150" height="150" style="display: none;"></canvas>
@@ -24,31 +24,43 @@
         let modelo = null;
         const PERSONAS = ["Daniela", "Fajardo", "Gabriel", "Idney", "Jesús", "Kevin", "Victor"];
 
-        // REPARADOR DE COMPATIBILIDAD KERAS 3 -> TFJS
-        function fixKeras3Structure(obj) {
+        // REPARADOR DE ARQUITECTURA KERAS 3 -> TFJS
+        function fixModelTopology(obj) {
             if (typeof obj !== 'object' || obj === null) return obj;
 
-            if (Array.isArray(obj)) return obj.map(fixKeras3Structure);
+            if (Array.isArray(obj)) return obj.map(fixModelTopology);
 
             const newObj = {};
             for (let key in obj) {
                 let value = obj[key];
 
-                // Fix 1: batch_shape -> batch_input_shape
+                // 1. Corregir batch_shape
                 if (key === 'batch_shape') {
-                    newObj['batch_input_shape'] = fixKeras3Structure(value);
+                    newObj['batch_input_shape'] = fixModelTopology(value);
                     continue;
                 }
 
-                // Fix 2: El error de forEach/nodeData
-                // Si inbound_nodes es un objeto o está mal formado, TFJS falla.
-                // Lo convertimos en una lista vacía si no es un array.
+                // 2. Corregir el error crítico de nodeData
+                // Si encontramos inbound_nodes que no es un array, lo convertimos
+                // al formato antiguo o lo dejamos vacío para que TFJS no explote.
                 if (key === 'inbound_nodes') {
-                    newObj[key] = Array.isArray(value) ? fixKeras3Structure(value) : [];
+                    if (Array.isArray(value)) {
+                        newObj[key] = fixModelTopology(value);
+                    } else {
+                        // Si es un objeto (formato Keras 3), lo forzamos a ser un array vacío
+                        // Esto suele funcionar en modelos Sequential que envuelven un Functional
+                        newObj[key] = [];
+                    }
+                    continue;
+                }
+                
+                // 3. Limpiar referencias a DTypePolicy (otra causa de errores)
+                if (key === 'dtype' && typeof value === 'object') {
+                    newObj[key] = value.config ? value.config.name : 'float32';
                     continue;
                 }
 
-                newObj[key] = fixKeras3Structure(value);
+                newObj[key] = fixModelTopology(value);
             }
             return newObj;
         }
@@ -56,30 +68,31 @@
         async function init() {
             const status = document.getElementById("status");
             try {
-                status.innerText = "Descargando modelo...";
+                status.innerText = "Descargando model.json...";
                 const response = await fetch('./model.json?v=' + Date.now());
                 const modelData = await response.json();
 
-                status.innerText = "Traduciendo formato Keras 3...";
-                // Aplicamos la reparación a la topología del modelo
-                modelData.modelTopology = fixKeras3Structure(modelData.modelTopology);
+                status.innerText = "Parcheando incompatibilidades...";
+                // Reparamos toda la configuración del modelo
+                if (modelData.modelTopology) {
+                    modelData.modelTopology = fixModelTopology(modelData.modelTopology);
+                    // Forzar versión de Keras compatible
+                    modelData.modelTopology.keras_version = "2.15.0"; 
+                }
 
-                status.innerText = "Cargando pesos en memoria...";
-                // Carga del modelo usando el objeto reparado
+                status.innerText = "Cargando modelo reparado...";
+                // Cargamos usando el objeto ya "traducido"
                 modelo = await tf.loadLayersModel(tf.io.fromMemory(modelData));
 
                 status.innerText = "IA LISTA ✅. Iniciando cámara...";
                 status.className = "alert alert-success m-3";
 
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: "user" } 
-                });
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
                 document.getElementById("video").srcObject = stream;
-                
                 predecir();
 
             } catch (err) {
-                console.error("Detalle del error:", err);
+                console.error("Error detallado:", err);
                 status.innerText = "Error: " + err.message;
                 status.className = "alert alert-danger m-3";
             }

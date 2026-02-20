@@ -13,7 +13,7 @@
     </style>
 </head>
 <body>
-    <div id="status" class="alert alert-info m-3">Reparando modelo...</div>
+    <div id="status" class="alert alert-info m-3">Reparando compatibilidad...</div>
     <div class="cam-box"><video id="video" playsinline autoplay muted></video></div>
     <div id="resultado">Esperando...</div>
     <canvas id="hidden_canvas" width="150" height="150" style="display: none;"></canvas>
@@ -24,58 +24,62 @@
         let modelo = null;
         const PERSONAS = ["Daniela", "Fajardo", "Gabriel", "Idney", "Jesús", "Kevin", "Victor"];
 
-        // REPARADOR AVANZADO
-        function limpiarKeras3(obj) {
+        // REPARADOR DE COMPATIBILIDAD KERAS 3 -> TFJS
+        function fixKeras3Structure(obj) {
             if (typeof obj !== 'object' || obj === null) return obj;
 
-            if (Array.isArray(obj)) return obj.map(limpiarKeras3);
+            if (Array.isArray(obj)) return obj.map(fixKeras3Structure);
 
-            const res = {};
+            const newObj = {};
             for (let key in obj) {
                 let value = obj[key];
-                
-                // 1. Cambiar batch_shape
-                let newKey = (key === 'batch_shape') ? 'batch_input_shape' : key;
 
-                // 2. ELIMINAR inbound_nodes conflictivos
-                // Keras 3 los guarda como objetos, pero TFJS espera arrays o nada.
-                // Al borrarlos en las capas de configuración, TFJS los reconstruye solo.
-                if (key === 'inbound_nodes') {
-                    continue; 
+                // Fix 1: batch_shape -> batch_input_shape
+                if (key === 'batch_shape') {
+                    newObj['batch_input_shape'] = fixKeras3Structure(value);
+                    continue;
                 }
 
-                res[newKey] = limpiarKeras3(value);
+                // Fix 2: El error de forEach/nodeData
+                // Si inbound_nodes es un objeto o está mal formado, TFJS falla.
+                // Lo convertimos en una lista vacía si no es un array.
+                if (key === 'inbound_nodes') {
+                    newObj[key] = Array.isArray(value) ? fixKeras3Structure(value) : [];
+                    continue;
+                }
+
+                newObj[key] = fixKeras3Structure(value);
             }
-            return res;
+            return newObj;
         }
 
         async function init() {
             const status = document.getElementById("status");
             try {
-                // 1. Cargar JSON original
+                status.innerText = "Descargando modelo...";
                 const response = await fetch('./model.json?v=' + Date.now());
-                const json = await response.json();
+                const modelData = await response.json();
 
-                // 2. Limpiar topología
-                json.modelTopology = limpiarKeras3(json.modelTopology);
-                
-                // 3. Cargar modelo correctamente (un solo argumento)
-                modelo = await tf.loadLayersModel(tf.io.fromMemory({
-                    modelTopology: json.modelTopology,
-                    weightsManifest: json.weightsManifest,
-                    format: json.format,
-                    generatedBy: json.generatedBy
-                }));
+                status.innerText = "Traduciendo formato Keras 3...";
+                // Aplicamos la reparación a la topología del modelo
+                modelData.modelTopology = fixKeras3Structure(modelData.modelTopology);
 
-                status.innerText = "IA Cargada ✅";
-                
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
-                document.getElementById("video").srcObject = stream;
+                status.innerText = "Cargando pesos en memoria...";
+                // Carga del modelo usando el objeto reparado
+                modelo = await tf.loadLayersModel(tf.io.fromMemory(modelData));
+
+                status.innerText = "IA LISTA ✅. Iniciando cámara...";
                 status.className = "alert alert-success m-3";
+
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "user" } 
+                });
+                document.getElementById("video").srcObject = stream;
+                
                 predecir();
 
             } catch (err) {
-                console.error(err);
+                console.error("Detalle del error:", err);
                 status.innerText = "Error: " + err.message;
                 status.className = "alert alert-danger m-3";
             }

@@ -6,16 +6,23 @@
     <title>IA Reconocimiento Facial</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background-color: #121212; color: white; text-align: center; }
-        .cam-box { width: 320px; height: 320px; margin: 20px auto; border: 4px solid #00d1b2; border-radius: 15px; overflow: hidden; }
+        body { background-color: #121212; color: white; text-align: center; font-family: sans-serif; }
+        .cam-box { width: 320px; height: 320px; margin: 20px auto; border: 4px solid #00d1b2; border-radius: 15px; overflow: hidden; background: black; }
         video { width: 100%; height: 100%; object-fit: cover; }
-        #resultado { font-size: 2rem; color: #00d1b2; font-weight: bold; }
+        #resultado { font-size: 2.2rem; color: #00d1b2; font-weight: bold; margin-top: 10px; }
+        .alert { font-size: 0.9rem; margin: 15px; border-radius: 10px; }
     </style>
 </head>
 <body>
-    <div id="status" class="alert alert-info m-3">Inicializando...</div>
-    <div class="cam-box"><video id="video" playsinline autoplay></video></div>
+
+    <div id="status" class="alert alert-info">Inicializando sistema...</div>
+    
+    <div class="cam-box">
+        <video id="video" playsinline autoplay muted></video>
+    </div>
+
     <div id="resultado">Esperando...</div>
+    
     <canvas id="hidden_canvas" width="150" height="150" style="display: none;"></canvas>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
@@ -26,24 +33,35 @@
 
         async function init() {
             const status = document.getElementById("status");
+            const video = document.getElementById("video");
             
             try {
-                // 1. Cargar el modelo con un truco para evitar la caché
+                // 1. Carga del modelo (forzando actualización con Date.now)
+                status.innerText = "Cargando IA (paso 1/2)...";
                 modelo = await tf.loadLayersModel('./model.json?v=' + Date.now());
-                status.innerText = "Modelo cargado ✅";
+                console.log("Modelo cargado correctamente");
                 
-                // 2. Pedir cámara
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
-                document.getElementById("video").srcObject = stream;
+                // 2. Acceso a la cámara
+                status.innerText = "Abriendo cámara (paso 2/2)...";
+                const constraints = { 
+                    audio: false, 
+                    video: { facingMode: "user", width: { ideal: 400 }, height: { ideal: 400 } } 
+                };
                 
-                status.innerText = "¡IA LISTA! ✅";
-                status.className = "alert alert-success m-3";
-                
-                // Empezar a predecir
-                predecir();
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+
+                // Esperar a que el video esté listo para empezar a predecir
+                video.onloadedmetadata = () => {
+                    status.innerText = "¡IA LISTA! ✅";
+                    status.className = "alert alert-success";
+                    predecir();
+                };
+
             } catch (err) {
+                console.error("Error detallado:", err);
                 status.innerText = "Error: " + err.message;
-                status.className = "alert alert-danger m-3";
+                status.className = "alert alert-danger";
             }
         }
 
@@ -53,19 +71,36 @@
                 const canvas = document.getElementById("hidden_canvas");
                 const ctx = canvas.getContext("2d");
                 
+                // Dibujar el frame actual del video en el canvas pequeño
                 ctx.drawImage(video, 0, 0, 150, 150);
-                const tensor = tf.tidy(() => {
-                    return tf.browser.fromPixels(canvas).toFloat().div(255).expandDims(0);
+
+                // Procesar la imagen para la IA
+                const prediccion = tf.tidy(() => {
+                    const tensor = tf.browser.fromPixels(canvas)
+                        .toFloat()
+                        .div(255.0) // Normalizar de 0-255 a 0-1
+                        .expandDims(0);
+                    return modelo.predict(tensor).dataSync();
                 });
 
-                const pred = await modelo.predict(tensor).data();
-                const max = Math.max(...pred);
-                const idx = pred.indexOf(max);
+                // Obtener el resultado con mayor probabilidad
+                const maxProb = Math.max(...prediccion);
+                const index = prediccion.indexOf(maxProb);
 
-                document.getElementById("resultado").innerText = max > 0.65 ? PERSONAS[idx] : "Identificando...";
+                // Mostrar el nombre si la confianza es mayor al 65%
+                const elementoResultado = document.getElementById("resultado");
+                if (maxProb > 0.65) {
+                    elementoResultado.innerText = PERSONAS[index];
+                } else {
+                    elementoResultado.innerText = "Identificando...";
+                }
             }
+            
+            // Repetir el proceso cada 600ms para no saturar el móvil
             setTimeout(predecir, 600);
         }
+
+        // Iniciar todo al cargar la página
         window.onload = init;
     </script>
 </body>
